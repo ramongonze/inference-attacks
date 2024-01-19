@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+from humanize import intword
+import matplotlib.pyplot as plt
 from infattacks.core.data import Data
 from abc import ABC, abstractmethod
 import itertools as it
@@ -11,7 +13,7 @@ class Attacks(ABC):
     Parameters:
         - dataset (Data): The dataset to be attacked.
         - qids (list): The quasi-identifiers used for the attack.
-        - sensitives (list, optional): List of sensitive attributes, default is None.
+        - sensitive (list, optional): List of sensitive attributes, default is None.
 
     Attributes:
         - dataset (Data): The dataset being attacked.
@@ -19,22 +21,45 @@ class Attacks(ABC):
         - sensitive (list): List of sensitive attributes.
     """
 
-    def __init__(self, dataset: Data, qids: list, sensitives=None) -> None:
+    def __init__(self, data: Data, qids: list, sensitive=None) -> None:
         """
-        Initializes an instance of the Attacks class.
+        Initialize an instance of the ReidentificationAttacker class.
 
         Args:
             dataset (Data): The dataset to be attacked.
             qids (list): The quasi-identifiers used for the attack.
             sensitive (list, optional): List of sensitive attributes, default is None.
+
+        Attributes:
+            - data (Data): The dataset being attacked.
+            - qids (list): The quasi-identifiers used for the attack.
+            - sensitive (list): List of sensitive attributes.
+            - num_qids (int): The number of quasi-identifiers.
+            - num_sensitive (int): The number of sensitive attributes.
+            - results_powerset_reid (None or dict): Results of re-identification attacks on the power set of qids.
+            - results_powerset_ai (None or dict): Results of attribute-inference attacks on the power set of qids.
+            - type (str): Type of attack, "prob" or "det", for probabilistic or deterministic attack, respectivelly.
+
+        Note:
+            - The 'sensitive' parameter is optional. If not provided, it defaults to None.
+            - 'results_powerset_reid' and 'results_powerset_ai' are initially set to None and can be populated
+            after calling the 'attack_power_set' method.
         """
-        self.data = dataset
+        self.data = data
         self.qids = qids
-        self.sensitive = sensitives
+        self.sensitive = sensitive
         self.num_qids = len(self.qids)
         self.num_sensitive = len(self.sensitive)
         self.results_powerset_reid = None
         self.results_powerset_ai = None
+        self.type = None
+
+    @abstractmethod
+    def _define_type(self) -> None:
+        """
+        Abstract method to define if the attack is Deterministic or Probabilistic.
+        The attribute "type" must be set as "prob" or "det".
+        """
 
     @abstractmethod
     def prior_reid(self) -> float:
@@ -109,11 +134,11 @@ class Attacks(ABC):
         results_reid = {"prior": prior_vul_reid, "posterior": pd.DataFrame(posterior_vul_reid)}
 
         posterior_vul_ai = pd.DataFrame(posterior_vul_ai)
+
         # Transform the result of each sensitive attribute to a column
         for att in self.sensitive:
             posterior_vul_ai["posterior_vul_" + att] = posterior_vul_ai["posterior_vul"].apply(lambda x: x[att])
         posterior_vul_ai.drop("posterior_vul", axis=1, inplace=True)
-
         results_ai = {"prior": prior_vul_ai, "posterior": posterior_vul_ai}
 
         # Add number of qids
@@ -123,6 +148,27 @@ class Attacks(ABC):
         self.results_powerset_reid = results_reid
         self.results_powerset_ai = results_ai
 
+    def get_prior_reid(self) -> float:
+        """
+        Get the prior vulnerability for Re-identification attacks.
+
+        Returns:
+            float: The prior vulnerability for Re-identification attacks.
+        """
+        return self.results_powerset_reid["prior"]
+
+    def get_prior_ai(self, sensitive: str) -> float:
+        """
+        Get the prior vulnerability for Attribute-Inference attacks on a specific sensitive attribute.
+
+        Args:
+            sensitive (str): The sensitive attribute for which to retrieve the prior vulnerability.
+
+        Returns:
+            float: The prior vulnerability for Attribute-Inference attacks on the specified sensitive attribute.
+        """
+        return self.results_powerset_ai["prior"][sensitive]
+    
     def get_max_post_reid(self) -> pd.DataFrame:
         """
         Get the maximum posterior vulnerability of Re-identification attacks per number of attributes.
@@ -130,7 +176,7 @@ class Attacks(ABC):
         Returns:
             pd.DataFrame: A DataFrame containing the maximum posterior vulnerabilities of Re-identification attacks per number of qids.
         """
-        vul_column = "post_vul"
+        vul_column = "posterior_vul"
         max_post = pd.DataFrame(columns=["num_qids", "qids", vul_column])
         for num_att in np.arange(1, self.num_qids + 1):
             filter_results = self.results_powerset_reid["posterior"][
@@ -141,13 +187,13 @@ class Attacks(ABC):
 
         return max_post
 
-    def get_max_post_ai(self, sensitive_attribute: str) -> pd.DataFrame:
+    def get_max_post_ai(self, sensitive: str) -> pd.DataFrame:
         """
         Get the maximum posterior vulnerability of Attribute-Inference attacks per number of attributes for a given
         sensitive attribute.
 
         Args:
-            sensitive_attribute (str): The sensitive attribute for which to take the maximum posterior vulnerability.
+            sensitive (str): The sensitive attribute for which to take the maximum posterior vulnerability.
 
         Returns:
             pd.DataFrame: A DataFrame containing the maximum posterior vulnerabilities of Attribute-Inference attacks per number of qids.
@@ -155,10 +201,10 @@ class Attacks(ABC):
         Raises:
             ValueError: If the specified sensitive attribute is not present in the dataset.
         """
-        if sensitive_attribute not in self.data.columns:
-            raise ValueError(f"Column {sensitive_attribute} is not in the dataset")
+        if sensitive not in self.data.columns:
+            raise ValueError(f"Column {sensitive} is not in the dataset")
 
-        vul_column = "post_vul_" + sensitive_attribute
+        vul_column = "posterior_vul_" + sensitive
 
         max_post = pd.DataFrame(columns=["num_qids", "qids", vul_column])
         for num_att in np.arange(1, self.num_qids + 1):
@@ -169,6 +215,158 @@ class Attacks(ABC):
 
         return max_post
 
+    def save_posterior_reid(self, file_name) -> None:
+        """
+        Save the results of posterior vulnerability generated by attack_power_set for Re-identification attacks.
+
+        This function exports the posterior vulnerability results for Re-identification attacks, which were
+        generated by the 'attack_power_set' method, to a CSV file.
+
+        Args:
+            file_name (str): The name of the CSV file to save the results.
+
+        Returns:
+            None
+
+
+        Note:
+            - The CSV file will contain columns such as 'num_qids', 'qids', and 'posterior_vul' with posterior vulnerability results.
+        """    
+        self.results_powerset_reid["posterior"].to_csv(
+            file_name,
+            float_format="%.8f",
+            index=False
+        )
+
+    def save_posterior_ai(self, file_name) -> None:
+        """
+        Save the results of posterior vulnerability generated by attack_power_set for Attribute-Inference attacks.
+
+        This function exports the posterior vulnerability results for Attribute-Inference attacks, which were
+        generated by the 'attack_power_set' method, to a CSV file.
+
+        Args:
+            file_name (str): The name of the CSV file to save the results.
+
+        Returns:
+            None
+
+        Note:
+            - The CSV file will contain columns such as 'num_qids', 'qids', and 'posterior_vul' with posterior vulnerability results.
+        """
+        self.results_powerset_ai["posterior"].to_csv(
+            file_name,
+            float_format="%.8f",
+            index=False
+        )
+
+    def save_posteriors(self, reid_file_name, ai_file_name) -> None:
+        """
+        Save both Re-identification and Attribute-Inference posterior vulnerability results.
+
+        This function calls 'save_posterior_reid' and 'save_posterior_ai' to save the results of posterior vulnerability
+        for Re-identification and Attribute-Inference attacks, respectively.
+
+        Args:
+            reid_file_name (str): The name of the CSV file to save Re-identification results.
+            ai_file_name (str): The name of the CSV file to save Attribute-Inference results.
+
+        Returns:
+            None
+
+        Note:
+            - Each CSV file will contain columns such as 'num_qids', 'qids', and 'posterior_vul' with posterior vulnerability results.
+        """
+        self.save_posterior_reid(reid_file_name)
+        self.save_posterior_ai(ai_file_name)
+
+    def plot_graph_reid(self):
+        """
+        Plot a graph for Re-identification attacks.
+
+        This function generates and displays a graph illustrating the prior and posterior vulnerability
+        for Re-identification attacks across different numbers of quasi-identifiers (QIDs).
+
+        Note:
+            - The graph includes the prior vulnerability (horizontal line) and the posterior vulnerability (scatter plot).
+            - The x-axis represents the number of QIDs, and the y-axis represents the vulnerability.
+            - The right y-axis shows the corresponding number of individuals affected.
+        """
+        prior = self.results_powerset_reid["prior"]
+        plt.hlines(prior, 1, self.results_powerset_reid["posterior"]["num_qids"].max(), label="Prior")
+        
+        x = self.results_powerset_reid["posterior"]["num_qids"]
+        y = self.results_powerset_reid["posterior"]["posterior_vul"]
+
+        if self.type == "prob":
+            title = "Probabilistic"
+        elif self.type == "det":
+            title = "Deterministic"
+
+        ax1 = plt.subplot()
+        plt.scatter(x, y, c=y, cmap="bwr", alpha=0.5, s=70, label="Posterior")
+        plt.xlabel("Number of QIDs")
+        plt.ylabel("Vulnerability")
+        plt.ylim((0,1))
+        plt.yticks(np.array(range(0,101,10))/100)
+
+        ax2 = ax1.twinx()
+        ax2.ticklabel_format(style="plain")
+        ax2.scatter(x, np.array(y)*self.data.num_rows, alpha=0)
+        plt.ylabel("Number of Individuals")
+        plt.ylim((0,self.data.num_rows))
+
+        plt.xticks(range(1,self.results_powerset_reid["posterior"]["num_qids"].max()+1))
+        plt.title(title + " Re-identification Attack")
+        ax1.legend()
+        ax1.grid(.3, linestyle="--")
+        plt.show()
+
+    def plot_graph_ai(self, sensitive:str):
+        """
+        Plot a graph for Attribute-Inference attacks.
+
+        This function generates and displays a graph illustrating the prior and posterior vulnerability
+        for Attribute-Inference attacks on a specific sensitive attribute across different numbers of quasi-identifiers (QIDs).
+
+        Args:
+            sensitive (str): The sensitive attribute for which to plot the graph.
+
+        Note:
+            - The graph includes the prior vulnerability (horizontal line) and the posterior vulnerability (scatter plot).
+            - The x-axis represents the number of QIDs, and the y-axis represents the vulnerability.
+            - The right y-axis shows the corresponding number of individuals affected.
+        """
+        prior = self.results_powerset_ai["prior"][sensitive]
+        plt.hlines(prior, 1, self.results_powerset_ai["posterior"]["num_qids"].max(), label="Prior")
+        
+        x = self.results_powerset_ai["posterior"]["num_qids"]
+        y = self.results_powerset_ai["posterior"]["posterior_vul_"+sensitive]
+
+        if self.type == "prob":
+            title = "Probabilistic"
+        elif self.type == "det":
+            title = "Deterministic"
+
+        ax1 = plt.subplot()
+        plt.scatter(x, y, c=y, cmap="bwr", alpha=0.5, s=70, label="Posterior")
+        plt.xlabel("Number of QIDs")
+        plt.ylabel("Vulnerability")
+        plt.ylim((0,1))
+        plt.yticks(np.array(range(0,101,10))/100)
+
+        ax2 = ax1.twinx()
+        ax2.ticklabel_format(style="plain")
+        ax2.scatter(x, np.array(y)*self.data.num_rows, alpha=0)
+        plt.ylabel("Number of Individuals")
+        plt.ylim((0,self.data.num_rows))
+
+        plt.xticks(range(1,self.results_powerset_ai["posterior"]["num_qids"].max()+1))
+        plt.title(title + f" Attribute-Inference Attack - {sensitive}")
+        ax1.legend()
+        ax1.grid(.3, linestyle="--")
+        plt.show()
+
 class ProbAttack(Attacks):
     """
     Concrete class for probability-based privacy attacks on datasets.
@@ -176,21 +374,28 @@ class ProbAttack(Attacks):
     Parameters:
         - dataset (Data): The dataset to be attacked.
         - qids (list): The quasi-identifiers used for the attack.
-        - sensitives (list, optional): List of sensitive attributes, default is None.
+        - sensitive (list, optional): List of sensitive attributes, default is None.
 
     Inherits from Attacks.
     """
 
-    def __init__(self, dataset: Data, qids: list, sensitives=None) -> None:
+    def __init__(self, dataset: Data, qids: list, sensitive=None) -> None:
         """
         Initializes an instance of the ProbAttack class.
 
         Args:
             dataset (Data): The dataset to be attacked.
             qids (list): The quasi-identifiers used for the attack.
-            sensitives (list, optional): List of sensitive attributes, default is None.
+            sensitive (list, optional): List of sensitive attributes, default is None.
         """
-        super().__init__(dataset, qids, sensitives)
+        super().__init__(dataset, qids, sensitive)
+        self._define_type()
+
+    def _define_type(self) -> None:
+        """
+        Defines the type of the attackl.
+        """
+        self.type = "prob"
 
     def prior_reid(self) -> float:
         """
@@ -230,10 +435,10 @@ class ProbAttack(Attacks):
         Returns:
             dict: A dictionary containing the prior attack probabilities for each sensitive attribute.
         Raises:
-            NameError: If sensitives is not defined.
+            NameError: If sensitive is not defined.
         """
         if self.sensitive is None:
-            raise NameError("sensitives is not declared.")
+            raise NameError("sensitive is not declared.")
         
         results = dict()
         for sens in self.sensitive:
@@ -252,13 +457,13 @@ class ProbAttack(Attacks):
             dict: A dictionary containing the posterior attack probabilities for each sensitive attribute.
 
         Raises:
-            NameError: If sensitives is not defined.
+            NameError: If sensitive is not defined.
         """
         if qids is None:
             qids = self.qids
 
         if self.sensitive is None:
-            raise NameError("sensitives is not declared.")
+            raise NameError("sensitive is not declared.")
         
         results = dict()
         for sens in self.sensitive:
@@ -278,21 +483,28 @@ class DetAttack(Attacks):
     Parameters:
         - dataset (Data): The dataset to be attacked.
         - qids (list): The quasi-identifiers used for the attack.
-        - sensitives (list, optional): List of sensitive attributes, default is None.
+        - sensitive (list, optional): List of sensitive attributes, default is None.
 
     Inherits from Attacks.
     """
 
-    def __init__(self, dataset: Data, qids: list, sensitives=None) -> None:
+    def __init__(self, dataset: Data, qids: list, sensitive=None) -> None:
         """
         Initializes an instance of the DetAttack class.
 
         Args:
             dataset (Data): The dataset to be attacked.
             qids (list): The quasi-identifiers used for the attack.
-            sensitives (list, optional): List of sensitive attributes, default is None.
+            sensitive (list, optional): List of sensitive attributes, default is None.
         """
-        super().__init__(dataset, qids, sensitives)
+        super().__init__(dataset, qids, sensitive)
+        self._define_type()
+
+    def _define_type(self) -> None:
+        """
+        Defines the type of the attackl.
+        """
+        self.type = "det"
 
     def prior_reid(self) -> float:
         """
@@ -330,10 +542,10 @@ class DetAttack(Attacks):
             dict: A dictionary containing the prior attack probabilities for each sensitive attribute.
 
         Raises:
-            ValueError: If sensitives is not defined.
+            ValueError: If sensitive is not defined.
         """
         if self.sensitive is None:
-            raise ValueError("sensitives not defined")
+            raise ValueError("sensitive not defined")
         
         results = dict()
         for sens in self.sensitive:
@@ -355,18 +567,18 @@ class DetAttack(Attacks):
             dict: A dictionary containing the posterior attack probabilities for each sensitive attribute.
 
         Raises:
-            ValueError: If sensitives is not defined.
+            ValueError: If sensitive is not defined.
         """
         if qids is None:
             qids = self.qids
 
         if self.sensitive is None:
-            raise ValueError("sensitives not defined")
+            raise ValueError("sensitive not defined")
         
         results = dict()
         for sens in self.sensitive:
-            partitions = self.data.dataframe.groupby(self.qids + [sens]).size().droplevel(self.sensitive).to_frame().rename(columns={0: "counts"})
-            groupby_qids = partitions.groupby(self.qids)["counts"].agg(["max", "sum"]).reset_index()
+            partitions = self.data.dataframe.groupby(qids + [sens]).size().droplevel(self.sensitive).to_frame().rename(columns={0: "counts"})
+            groupby_qids = partitions.groupby(qids)["counts"].agg(["max", "sum"]).reset_index()
             posterior_prob = groupby_qids[(groupby_qids["max"] == groupby_qids["sum"])]["max"].sum() / self.data.num_rows
             results[sens] = posterior_prob
 
