@@ -279,18 +279,24 @@ class Attacks(ABC):
         """
         self.save_posterior_reid(reid_file_name)
         self.save_posterior_ai(ai_file_name)
-
-    def plot_graph_reid(self):
+   
+    def plot_graph_reid(self, show_graph=True, save_graph=None, format=None) -> None:
         """
-        Plot a graph for Re-identification attacks.
+        Plot a graph depicting the vulnerabilities in Re-identification attacks.
 
-        This function generates and displays a graph illustrating the prior and posterior vulnerability
-        for Re-identification attacks across different numbers of quasi-identifiers (QIDs).
+        Args:
+            show_graph (bool, optional): Whether to display the graph. Default is True.
+            save_graph (str, optional): File path to save the graph. If None, the graph won't be saved. Default is None.
+            format (str, optional): The file format for saving the graph (e.g., 'png', 'pdf'). Applicable only if `save_graph` is provided.
 
         Note:
-            - The graph includes the prior vulnerability (horizontal line) and the posterior vulnerability (scatter plot).
-            - The x-axis represents the number of QIDs, and the y-axis represents the vulnerability.
-            - The right y-axis shows the corresponding number of individuals affected.
+            - The graph illustrates the prior and posterior vulnerabilities for Re-identification attacks.
+            - The x-axis represents the number of quasi-identifiers (QIDs), while the y-axis represents the vulnerability.
+            - The graph includes both prior (baseline) and posterior (calculated) vulnerabilities.
+            - The prior vulnerability is represented by a horizontal line labeled "Prior."
+            - The posterior vulnerabilities are shown as scattered points, and the color intensity represents the vulnerability level.
+            - The right y-axis indicates the corresponding number of individuals affected by the attack.
+            - The graph can be displayed, saved to a file, or both based on the specified parameters.
         """
         prior = self.results_powerset_reid["prior"]
         plt.hlines(prior, 1, self.results_powerset_reid["posterior"]["num_qids"].max(), label="Prior")
@@ -320,9 +326,17 @@ class Attacks(ABC):
         plt.title(title + " Re-identification Attack")
         ax1.legend()
         ax1.grid(.3, linestyle="--")
-        plt.show()
+        
+        fig = plt.gcf()
+        fig.set_size_inches(10, 6)
 
-    def plot_graph_ai(self, sensitive:str):
+        if save_graph:
+            plt.savefig(save_graph, format=format, bbox_inches="tight")
+        
+        if show_graph:
+            plt.show()
+
+    def plot_graph_ai(self, sensitive:str, show_graph=True, save_graph=None, format=None) -> None:
         """
         Plot a graph for Attribute-Inference attacks.
 
@@ -331,6 +345,9 @@ class Attacks(ABC):
 
         Args:
             sensitive (str): The sensitive attribute for which to plot the graph.
+            show_graph (bool, optional): Whether to display the graph. Default is True.
+            save_graph (str, optional): File path to save the graph. If None, the graph won't be saved. Default is None.
+            format (str, optional): The file format for saving the graph (e.g., 'png', 'pdf'). Applicable only if `save_graph` is provided.
 
         Note:
             - The graph includes the prior vulnerability (horizontal line) and the posterior vulnerability (scatter plot).
@@ -365,7 +382,15 @@ class Attacks(ABC):
         plt.title(title + f" Attribute-Inference Attack - {sensitive}")
         ax1.legend()
         ax1.grid(.3, linestyle="--")
-        plt.show()
+        
+        fig = plt.gcf()
+        fig.set_size_inches(10, 6)
+
+        if save_graph:
+            plt.savefig(save_graph, format=format, bbox_inches="tight")
+        
+        if show_graph:
+            plt.show()
 
 class ProbAttack(Attacks):
     """
