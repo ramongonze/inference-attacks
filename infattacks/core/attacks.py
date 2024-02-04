@@ -147,27 +147,6 @@ class Attacks(ABC):
 
         self.results_powerset_reid = results_reid
         self.results_powerset_ai = results_ai
-
-    def get_prior_reid(self) -> float:
-        """
-        Get the prior vulnerability for Re-identification attacks.
-
-        Returns:
-            float: The prior vulnerability for Re-identification attacks.
-        """
-        return self.results_powerset_reid["prior"]
-
-    def get_prior_ai(self, sensitive: str) -> float:
-        """
-        Get the prior vulnerability for Attribute-Inference attacks on a specific sensitive attribute.
-
-        Args:
-            sensitive (str): The sensitive attribute for which to retrieve the prior vulnerability.
-
-        Returns:
-            float: The prior vulnerability for Attribute-Inference attacks on the specified sensitive attribute.
-        """
-        return self.results_powerset_ai["prior"][sensitive]
     
     def get_max_post_reid(self) -> pd.DataFrame:
         """
@@ -392,6 +371,49 @@ class Attacks(ABC):
         if show_graph:
             plt.show()
 
+    def _gen_histogram(self, partition_vul, counts, hist_bin_size) -> np.ndarray:
+        """
+        Generate a histogram of posterior vulnerabilities.
+
+        Parameters:
+            - partition_vul (list or np.ndarray): List or array where the ith position is the .
+            - counts (list or np.ndarray): List or array containing the counts associated with each partition.
+            - hist_bin_size (int): Size of each histogram bin.
+
+        Returns:
+            np.ndarray: An array representing the histogram counts, where the ith position is the number of counts in the ith bin of the histograms (that varies with hist_bin_size). For instance, if hist_bin_size=5, bin 0: [0, 0.05), bin 2: [0.05, 0.1), ..., bin 19: [0.95, 1].
+        """
+        partition_vul = np.array(partition_vul)
+        counts = np.array(counts)
+        num_bins = 100 // hist_bin_size
+
+        histogram_counts = np.zeros(num_bins)
+        for i in np.arange(len(partition_vul)):
+            # Ex.: If hist_bin_size = 5, bin 0: [0, 0.05), bin 2: [0.05, 0.1), ..., bin 19: [0.95, 1]
+            bin_number = min(int(partition_vul[i] / hist_bin_size * 100), num_bins - 1)
+            histogram_counts[bin_number] += counts[i]
+
+        return histogram_counts
+
+    def plot_histogram(self, histogram_counts, title, x_label, y_label, hist_bin_size=5):
+        histogram = dict()
+        for i in range(len(histogram_counts)):
+            if i < len(histogram_counts) - 1:
+                histogram[f"[{i * (hist_bin_size / 100):.2f},{(i + 1) * (hist_bin_size / 100):.2f})"] = int(histogram_counts[i])
+            else:
+                histogram[f"[{i * (hist_bin_size / 100):.2f},{(i + 1) * (hist_bin_size / 100):.2f}]"] = int(histogram_counts[i])
+
+        x_labels = histogram.keys()
+        x = list(range(len(x_labels)))
+        y = list(histogram.values())
+        plt.bar(x,y)
+        plt.xticks(x, x_labels, rotation=90)
+        plt.title(title)
+        plt.xlabel(x_label)
+        plt.ylabel(y_label)
+        plt.show()
+        
+
 class ProbAttack(Attacks):
     """
     Concrete class for probability-based privacy attacks on datasets.
@@ -418,7 +440,7 @@ class ProbAttack(Attacks):
 
     def _define_type(self) -> None:
         """
-        Defines the type of the attackl.
+        Defines the type of the attack.
         """
         self.type = "prob"
 
@@ -431,27 +453,31 @@ class ProbAttack(Attacks):
         """
         return 1 / self.data.num_rows
 
-    def posterior_reid(self, qids=None) -> float:
+    def posterior_reid(self, qids=None, hist=False, hist_bin_size=5):
         """
-        Calculates the posterior Re-identification attack probability.
+        Calculate the posterior Re-identification attack probability for a given dataset.
 
-        Args:
-            qids (list, optional): List of quasi-identifiers used to perform the Re-identification attack.
-                If not provided (default is None), all the qids specified in the initialization of the class will be considered.
+        Parameters:
+            - dataset (DataFrame): The dataset to be analyzed.
+            - qids (list, optional): List of quasi-identifiers. If not provided, all columns will be used.
+            - hist (bool, optional): Whether to generate a histogram of Re-identification probabilities. Default is False.
+            - hist_bin_size (int, optional): Bin size for the histogram if hist is True. Default is 5.
 
         Returns:
-            float: The posterior probability of a Re-identification attack.
-            
-        Returns:
-            float: The posterior Re-identification attack probability.
+            float or tuple: If hist is False, returns the expected posterior Re-identification attack probability.
+            If hist is True, returns a tuple containing the expected posterior probability and a histogram dictionary.
         """
         if qids is None:
             qids = self.qids
 
         partitions = self.data.dataframe.groupby(qids).size().to_numpy()
-        _, counts = np.unique(partitions, return_counts=True)
-        posterior_prob = counts.sum() / self.data.num_rows
-        return posterior_prob
+        expected_posterior_prob = len(partitions) / self.data.num_rows
+
+        if hist:
+            histogram = self._gen_histogram(1/np.array(partitions), partitions, hist_bin_size)
+            return expected_posterior_prob, histogram
+        
+        return expected_posterior_prob
 
     def prior_ai(self) -> dict:
         """
@@ -470,36 +496,33 @@ class ProbAttack(Attacks):
             results[sens] = self.data.dataframe[sens].value_counts().max() / self.data.num_rows
         return results
 
-    def posterior_ai(self, qids=None) -> dict:
-        """
-        Calculates the posterior Attribute-Inference attack probabilities.
-
-        Args:
-            qids (list, optional): List of quasi-identifiers used to perform the Attribute-Inference attack.
-                If not provided (default is None), all the qids specified in the initialization of the class will be considered.
-
-        Returns:
-            dict: A dictionary containing the posterior attack probabilities for each sensitive attribute.
-
-        Raises:
-            NameError: If sensitive is not defined.
-        """
+    def posterior_ai(self, qids=None, hist=False, hist_bin_size=5):
         if qids is None:
             qids = self.qids
 
         if self.sensitive is None:
             raise NameError("sensitive is not declared.")
         
-        results = dict()
+        # max = size of largest partition
+        # sum = number of people in all partitions (for that combination of qids + [sens])
+        expectations = dict()
+        histograms = dict()
         for sens in self.sensitive:
             partitions = self.data.dataframe.groupby(
                 qids+[sens]).size().droplevel(self.sensitive).to_frame().rename(columns={0: "counts"})
             groupby_qids = partitions.groupby(qids)["counts"].agg(["max", "sum"]).reset_index()
-
             posterior_prob = groupby_qids["max"].sum() / self.data.num_rows
-            results[sens] = posterior_prob
+            if hist:
+                counts = groupby_qids["sum"].to_numpy()
+                partition_vul = groupby_qids["max"].to_numpy() / counts
+                histograms[sens] = self._gen_histogram(partition_vul, counts, hist_bin_size)
 
-        return results
+            expectations[sens] = posterior_prob
+
+        if hist:
+            return expectations, histograms
+        
+        return expectations
 
 class DetAttack(Attacks):
     """
