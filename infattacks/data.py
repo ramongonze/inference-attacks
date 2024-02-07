@@ -20,7 +20,7 @@ class Data:
         - columns (list): The list of column names in the dataset.
     """
 
-    def __init__(self, file_name=None, dataframe=None, sep_csv=None, columns=None, na_values=-1):
+    def __init__(self, file_name=None, dataframe=None, sep_csv=None, columns=None, encoding="utf-8", na_values=-1):
         """
         Initializes a Dataset object.
 
@@ -29,6 +29,7 @@ class Data:
             dataframe (pandas.DataFrame, optional): A pandas DataFrame containing the dataset.
             sep_csv (str, optional): The delimiter used in CSV files.
             columns (list, optional): Columns to be read from a file (valid only for csv files). When not given, it will read all columns. Default is None.
+            encoding(str, optional): Encoding to use for UTF when reading/writing (valid only for csv files). Default is "utf-8".
             na_values (int, optional): The value to replace NaN values with in the dataset, default is -1.
         """
         if dataframe is not None:
@@ -41,7 +42,7 @@ class Data:
             if file_type == ".csv":
                 if sep_csv is None:
                     raise NameError("sep_csv must be provided for CSV files")
-                self.dataframe = pd.read_csv(file_name, sep=sep_csv, usecols=columns)
+                self.dataframe = pd.read_csv(file_name, sep=sep_csv, usecols=columns, encoding=encoding)
             elif file_type == ".rdata":
                 rdata = pyreadr.read_r(file_name)
                 data = next(iter(rdata))
