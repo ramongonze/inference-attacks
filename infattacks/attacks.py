@@ -32,21 +32,21 @@ class Attack(ABC):
             - sensitive (list): List of sensitive attributes.
             - num_qids (int): The number of quasi-identifiers.
             - num_sensitive (int): The number of sensitive attributes.
-            - post_comb_qids_reid (None or DataFrame): Posterior vulnerabilities of Re-identification attacks for different number and combinations of quasi-identifiers. It's populated after calling the `attack_comb_qids` method.
-            - post_comb_qids_ai (None or DataFrame): Posterior vulnerabilities of Attribute-inference attacks for different number and combinations of quasi-identifiers. It's populated after calling the `attack_comb_qids` method.
+            - result_comb_qids_reid (None or DataFrame): Posterior vulnerabilities of Re-identification attacks for different number and combinations of quasi-identifiers. It's populated after calling the `post_comb_qids_reid` method.
+            - result_comb_qids_ai (None or DataFrame): Posterior vulnerabilities of Attribute-inference attacks for different number and combinations of quasi-identifiers. It's populated after calling the `post_comb_qids_ai` method.
 
         Note:
             - The 'sensitive' parameter is optional. If not provided, it defaults to None.
-            - 'post_comb_qids_reid' and 'post_comb_qids_ai' are initially set to None and can be populated
-            after calling the 'attack_comb_qids' method.
+            - 'result_comb_qids_reid' and 'result_comb_qids_ai' are initially set to None and can be populated
+            after calling the 'post_comb_qids_reid' and 'post_comb_qids_ai' methods, respectivelly.
         """
         self.data = data
         self.qids = qids
         self.sensitive = sensitive
         self.num_qids = len(self.qids)
         self.num_sensitive = len(self.sensitive)
-        self.post_comb_qids_reid = None
-        self.post_comb_qids_ai = None
+        self.result_comb_qids_reid = None
+        self.result_comb_qids_ai = None
 
     @abstractmethod
     def prior_reid(self) -> float:
@@ -110,7 +110,7 @@ class Attack(ABC):
         """
         Compute the posterior vulnerabilitiy of Re-identification attacks for different number and combinations of quasi-identifiers.
 
-        The results are stored as a pandas DataFrame in the class attribute `post_comb_qids_reid`.
+        The results are stored as a pandas DataFrame in the class attribute `result_comb_qids_reid`.
 
         Parameters: 
             num_min (int, optional): Minimum number of quasi-identifiers (QIDs) to consider.
@@ -120,7 +120,7 @@ class Attack(ABC):
                 Defaults is None.
 
         Returns:
-            None: This method updates the object's state by storing the computed results in `self.post_comb_qids_reid`.
+            None: This method updates the object's state by storing the computed results in `self.result_comb_qids_reid`.
         """
         post_reid = {"qids": [], "post_vul": []}
 
@@ -140,13 +140,13 @@ class Attack(ABC):
 
         post_reid = pd.DataFrame(post_reid)
         post_reid["num_qids"] = post_reid["qids"].apply(lambda x: str(x).count(",") + 1)
-        self.post_comb_qids_reid = post_reid
+        self.result_comb_qids_reid = post_reid
 
     def post_comb_qids_ai(self, num_min=1, num_max=None) -> None:
         """
         Compute the posterior vulnerabilitiy of Attribute-inference attacks for different number and combinations of quasi-identifiers.
 
-        The results are stored as a pandas DataFrame in the class attribute `post_comb_qids_ai`.
+        The results are stored as a pandas DataFrame in the class attribute `result_comb_qids_ai`.
 
         Parameters: 
             num_min (int, optional): Minimum number of quasi-identifiers (QIDs) to consider.
@@ -156,7 +156,7 @@ class Attack(ABC):
                 Defaults is None.
 
         Returns:
-            None: This method updates the object's state by storing the computed results in `self.post_comb_qids_ai`.
+            None: This method updates the object's state by storing the computed results in `self.result_comb_qids_ai`.
         """
         post_ai = {"qids": [], "post_vul": []}
 
@@ -182,23 +182,23 @@ class Attack(ABC):
         post_ai.drop("post_vul", axis=1, inplace=True)
 
         post_ai["num_qids"] = post_ai["qids"].apply(lambda x: str(x).count(",") + 1)
-        self.post_comb_qids_ai = post_ai
+        self.result_comb_qids_ai = post_ai
     
     def max_post_reid(self) -> pd.DataFrame:
         """
-        Given all attacks run in `attack_comb_qids` method, for each number of QIDS, get the combination that produced the highest posterior vulnerability of Re-identification attacks.
+        Given attacks run in `post_comb_qids_reid` method, for each number of QIDS, get the combination that produced the highest posterior vulnerability of Re-identification attacks.
 
         Returns:
             pd.DataFrame: A DataFrame containing the maximum posterior vulnerabilities of Re-identification attacks per number of qids.
         """
-        if self.post_comb_qids_reid is None:
-            raise ValueError("max_post_reid should be called only after calling attack_comb_qids")
+        if self.result_comb_qids_reid is None:
+            raise ValueError("max_post_reid should be called only after calling post_comb_qids_reid")
 
         vul_column = "post_vul"
         max_post = pd.DataFrame(columns=["num_qids", "qids", vul_column])
         for num_att in np.arange(1, self.num_qids + 1):
-            filter_results = self.post_comb_qids_reid[
-                self.post_comb_qids_reid["num_qids"] == num_att
+            filter_results = self.result_comb_qids_reid[
+                self.result_comb_qids_reid["num_qids"] == num_att
             ]
             max_vul = filter_results.loc[filter_results[vul_column].idxmax()]
             max_post.loc[len(max_post)] = max_vul
@@ -207,7 +207,7 @@ class Attack(ABC):
 
     def max_post_ai(self, sensitive: str) -> pd.DataFrame:
         """
-        Given all attacks run in `attack_comb_qids` method, for each number of QIDS, get the combination that produced the highest posterior vulnerability of Attribute-inference attacks.
+        Given attacks run in `post_comb_qids_ai` method, for each number of QIDS, get the combination that produced the highest posterior vulnerability of Attribute-inference attacks.
 
         Parameters:
             sensitive (str): The sensitive attribute for which to take the maximum posterior vulnerability.
@@ -215,8 +215,8 @@ class Attack(ABC):
         Returns:
             pd.DataFrame: A DataFrame containing the maximum posterior vulnerabilities of Attribute-inference attacks per number of qids.
         """
-        if self.post_comb_qids_ai is None:
-            raise ValueError("max_post_ai should be called only after calling attack_comb_qids")
+        if self.result_comb_qids_ai is None:
+            raise ValueError("max_post_ai should be called only after calling post_comb_qids_ai")
                              
         if sensitive not in self.data.columns:
             raise ValueError(f"Column {sensitive} is not in the dataset")
@@ -225,7 +225,7 @@ class Attack(ABC):
 
         max_post = pd.DataFrame(columns=["num_qids", "qids", vul_column])
         for num_att in np.arange(1, self.num_qids + 1):
-            post_results = self.post_comb_qids_ai
+            post_results = self.result_comb_qids_ai
             filter_results = post_results[post_results["num_qids"] == num_att]
             max_vul = filter_results.loc[filter_results[vul_column].idxmax()]
             max_post.loc[len(max_post)] = max_vul
@@ -234,7 +234,7 @@ class Attack(ABC):
 
     def save_post_reid(self, file_name) -> None:
         """
-        Save the results of posterior vulnerabilities generated by `attack_comb_qids` for Re-identification attacks in a CSV file.
+        Save the results of posterior vulnerabilities generated by `post_comb_qids_reid` for Re-identification attacks in a CSV file.
 
         Parameters:
             file_name (str): The name of the CSV file to save the results.
@@ -242,10 +242,10 @@ class Attack(ABC):
         Note:
             - The CSV file will contain columns such as 'num_qids', 'qids', and 'post_vul' with posterior vulnerability results.
         """
-        if self.post_comb_qids_reid is None:
-            raise ValueError("save_post_reid should be called only after calling attack_comb_qids")
+        if self.result_comb_qids_reid is None:
+            raise ValueError("save_post_reid should be called only after calling post_comb_qids_reid")
 
-        self.post_comb_qids_reid.to_csv(
+        self.result_comb_qids_reid.to_csv(
             file_name,
             float_format="%.8f",
             index=False
@@ -253,7 +253,7 @@ class Attack(ABC):
 
     def save_post_ai(self, file_name) -> None:
         """
-        Save the results of posterior vulnerabilities generated by `attack_comb_qids` for Attribute-inference attacks in a CSV file.
+        Save the results of posterior vulnerabilities generated by `post_comb_qids_ai` for Attribute-inference attacks in a CSV file.
 
         Parameters:
             file_name (str): The name of the CSV file to save the results.
@@ -261,10 +261,10 @@ class Attack(ABC):
         Note:
             - The CSV file will contain columns such as 'num_qids', 'qids', and 'post_vul_X' with posterior vulnerability results, where X is a sensitive attribute. If there is more than one sensitive attribute, there will a single column for each one of them.
         """
-        if self.post_comb_qids_ai is None:
-            raise ValueError("save_post_ai should be called only after calling attack_comb_qids")
+        if self.result_comb_qids_ai is None:
+            raise ValueError("save_post_ai should be called only after calling post_comb_qids_ai")
 
-        self.post_comb_qids_ai.to_csv(
+        self.result_comb_qids_ai.to_csv(
             file_name,
             float_format="%.8f",
             index=False
