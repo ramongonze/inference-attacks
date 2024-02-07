@@ -106,11 +106,11 @@ class Attack(ABC):
 
         return histogram_counts
     
-    def post_comb_qids(self, num_min=1, num_max=None) -> None:
+    def post_comb_qids_reid(self, num_min=1, num_max=None) -> None:
         """
-        Compute the posterior vulnerabilitiy of Re-identification and Attribute-inference attacks for different number and combinations of quasi-identifiers.
+        Compute the posterior vulnerabilitiy of Re-identification attacks for different number and combinations of quasi-identifiers.
 
-        The results are stored as pandas DataFrames in the class attributes `post_comb_qids_reid` and `post_comb_qids_ai`.
+        The results are stored as a pandas DataFrame in the class attribute `post_comb_qids_reid`.
 
         Parameters: 
             num_min (int, optional): Minimum number of quasi-identifiers (QIDs) to consider.
@@ -120,18 +120,16 @@ class Attack(ABC):
                 Defaults is None.
 
         Returns:
-            None: This method updates the object's state by storing the computed results in
-            self.post_comb_qids_reid and self.post_comb_qids_ai.
+            None: This method updates the object's state by storing the computed results in `self.post_comb_qids_reid`.
         """
         post_reid = {"qids": [], "post_vul": []}
-        post_ai = {"qids": [], "post_vul": []}
 
         if num_min is None:
             num_min = 1
         if num_max is None:
             num_max = self.num_qids
 
-        # For all possible QIDs combinations
+        # For all possible QIDs combinations in the given range
         for num_qids in np.arange(num_min, num_max + 1):
             for qids_sel in it.combinations(self.qids, num_qids):
                 qids_sel = list(qids_sel)
@@ -140,11 +138,42 @@ class Attack(ABC):
                 post_reid["qids"].append(", ".join(qids_sel))
                 post_reid["post_vul"].append(self.post_reid(qids_sel))
 
+        post_reid = pd.DataFrame(post_reid)
+        post_reid["num_qids"] = post_reid["qids"].apply(lambda x: str(x).count(",") + 1)
+        self.post_comb_qids_reid = post_reid
+
+    def post_comb_qids_ai(self, num_min=1, num_max=None) -> None:
+        """
+        Compute the posterior vulnerabilitiy of Attribute-inference attacks for different number and combinations of quasi-identifiers.
+
+        The results are stored as a pandas DataFrame in the class attribute `post_comb_qids_ai`.
+
+        Parameters: 
+            num_min (int, optional): Minimum number of quasi-identifiers (QIDs) to consider.
+                Defaults is 1.
+            num_max (int, optional): Maximum number of quasi-identifiers (QIDs) to consider.
+                If None, it considers all possible combinations up to the total number of QIDs (the power set).
+                Defaults is None.
+
+        Returns:
+            None: This method updates the object's state by storing the computed results in `self.post_comb_qids_ai`.
+        """
+        post_ai = {"qids": [], "post_vul": []}
+
+        if num_min is None:
+            num_min = 1
+        if num_max is None:
+            num_max = self.num_qids
+
+        # For all possible QIDs combinations in the given range
+        for num_qids in np.arange(num_min, num_max + 1):
+            for qids_sel in it.combinations(self.qids, num_qids):
+                qids_sel = list(qids_sel)
+
                 # Attribute-inference attack
                 post_ai["qids"].append(", ".join(qids_sel))
                 post_ai["post_vul"].append(self.post_ai(qids_sel))
 
-        post_reid = pd.DataFrame(post_reid)
         post_ai = pd.DataFrame(post_ai)
 
         # Transform the result of each sensitive attribute to a column
@@ -152,11 +181,7 @@ class Attack(ABC):
             post_ai["post_vul_" + att] = post_ai["post_vul"].apply(lambda x: x[att])
         post_ai.drop("post_vul", axis=1, inplace=True)
 
-        # Add number of qids
-        post_reid["num_qids"] = post_reid["qids"].apply(lambda x: str(x).count(",") + 1)
         post_ai["num_qids"] = post_ai["qids"].apply(lambda x: str(x).count(",") + 1)
-
-        self.post_comb_qids_reid = post_reid
         self.post_comb_qids_ai = post_ai
     
     def max_post_reid(self) -> pd.DataFrame:
