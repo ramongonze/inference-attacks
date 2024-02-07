@@ -3,7 +3,10 @@ import setuptools
 install_requires = [
     "numpy >= 1.21.5",
     "pyreadr",
-    "pandas"
+    "pandas",
+    "humanize",
+    "matplotlib",
+    "sas7bdat"
 ]
 
 docs_require = [
@@ -15,12 +18,12 @@ docs_require = [
 setuptools.setup(
     name="infattacks",
     version="1.0",
+    python_requires=">=3.8",
     description="Python library for Inference Attacks",
     author="Ramon Gonçalves Gonze",
     author_email="ramongonze@gmail.com",
-    url="https://github.com/ramongonze/libqif",
+    url="https://github.com/ramongonze/infattacks",
     packages=setuptools.find_packages(),
     install_requires=install_requires,
     extras_require={"docs": docs_require},
-    python_requires=">=3.8"
 )

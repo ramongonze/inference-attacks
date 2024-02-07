@@ -1,1 +1,6 @@
-numpy>=1.21.5
+numpy >= 1.21.5,
+pyreadr,
+pandas,
+humanize,
+matplotlib,
+sas7bdat
