@@ -41,9 +41,9 @@ class Attack(ABC):
         """
         self.data = data
         self.qids = qids
-        self.sensitive = sensitive
         self.num_qids = len(self.qids)
-        self.num_sensitive = len(self.sensitive)
+        self.sensitive = sensitive
+        self.num_sensitive = 0 if self.sensitive is None else len(self.sensitive)
         self.result_comb_qids_reid = None
         self.result_comb_qids_ai = None
 
@@ -195,6 +195,9 @@ class Attack(ABC):
         if num_max is None:
             num_max = self.num_qids
 
+        if self.num_sensitive == 0:
+            raise ValueError("No sensitive attribute was defined")
+
         self.result_comb_qids_ai = pd.DataFrame(
             columns=["qids", "num_qids"]+["post_vul_"+att for att in self.sensitive]
         )
@@ -248,7 +251,9 @@ class Attack(ABC):
 
         vul_column = "post_vul"
         max_post = pd.DataFrame(columns=["qids", "num_qids", vul_column])
-        for num_att in np.arange(1, self.num_qids + 1):
+        num_min = self.result_comb_qids_reid["num_qids"].min()
+        num_max = self.result_comb_qids_reid["num_qids"].max()
+        for num_att in np.arange(num_min, num_max + 1):
             filter_results = self.result_comb_qids_reid[
                 self.result_comb_qids_reid["num_qids"] == num_att
             ]
@@ -276,7 +281,9 @@ class Attack(ABC):
         vul_column = "post_vul_" + sensitive
 
         max_post = pd.DataFrame(columns=["qids", "num_qids", vul_column])
-        for num_att in np.arange(1, self.num_qids + 1):
+        num_min = self.result_comb_qids_ai["num_qids"].min()
+        num_max = self.result_comb_qids_ai["num_qids"].max()
+        for num_att in np.arange(num_min, num_max + 1):
             post_results = self.result_comb_qids_ai
             filter_results = post_results[post_results["num_qids"] == num_att]
             max_vul = filter_results.loc[filter_results[vul_column].idxmax()]
@@ -347,8 +354,8 @@ class Probabilistic(Attack):
         Returns:
             dict: A dictionary containing the prior vulnerability for each sensitive attribute.
         """
-        if self.sensitive is None:
-            raise NameError("sensitive is not declared")
+        if self.num_sensitive == 0:
+            raise ValueError("No sensitive attribute was defined")
         
         results = dict()
         for sens in self.sensitive:
@@ -372,8 +379,8 @@ class Probabilistic(Attack):
             qids = self.qids
         qids = list(qids)
 
-        if self.sensitive is None:
-            raise NameError("sensitive is not declared")
+        if self.num_sensitive == 0:
+            raise ValueError("No sensitive attribute was defined")
         
         # max = size of largest partition
         # sum = number of people in all partitions (for that combination of qids + [sens])
@@ -453,8 +460,8 @@ class Deterministic(Attack):
         Returns:
             dict: A dictionary containing the prior vulnerability for each sensitive attribute.
         """
-        if self.sensitive is None:
-            raise ValueError("sensitive not defined")
+        if self.num_sensitive == 0:
+            raise ValueError("No sensitive attribute was defined")
         
         results = dict()
         for sens in self.sensitive:
@@ -478,8 +485,8 @@ class Deterministic(Attack):
         if qids is None:
             qids = self.qids
 
-        if self.sensitive is None:
-            raise ValueError("sensitive not defined")
+        if self.num_sensitive == 0:
+            raise ValueError("No sensitive attribute was defined")
         
         results = dict()
         for sens in self.sensitive:
