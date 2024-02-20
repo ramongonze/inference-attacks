@@ -2,9 +2,8 @@ import numpy as np
 import pandas as pd
 import itertools as it
 from humanize import intword
-import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize, LinearSegmentedColormap
 from infattacks.data import Data
+import multiprocessing
 from abc import ABC, abstractmethod
 
 class Attack(ABC):
@@ -105,8 +104,14 @@ class Attack(ABC):
             histogram_counts[bin_number] += counts[i]
 
         return histogram_counts
+        
+    def _parallel_post_reid(self, qids):
+        return (qids, self.post_reid(qids=qids))
+
+    def _parallel_post_ai(self, qids):
+        return (qids, self.post_ai(qids=qids))
     
-    def post_comb_qids_reid(self, num_min=1, num_max=None) -> None:
+    def post_comb_qids_reid(self, num_min=1, num_max=None, n_processes=1, save_file_name=None) -> None:
         """
         Compute the posterior vulnerabilitiy of Re-identification attacks for different number and combinations of quasi-identifiers.
 
@@ -118,31 +123,54 @@ class Attack(ABC):
             num_max (int, optional): Maximum number of quasi-identifiers (QIDs) to consider.
                 If None, it considers all possible combinations up to the total number of QIDs (the power set).
                 Defaults is None.
+            n_processes (int, optional): Number of processes to run the method in parallel using multiprocessing package.
+                Default is 1.
+            save_file_name (str, optional): File name to save the results. They will be saved in CSV format.
 
         Returns:
             None: This method updates the object's state by storing the computed results in `self.result_comb_qids_reid`.
-        """
-        post_reid = {"qids": [], "post_vul": []}
 
-        if num_min is None:
-            num_min = 1
+        Note:
+            - If save_file_name is given, the CSV file will contain the columns 'qids', 'num_qids' and 'post_vul' with posterior vulnerability results.
+        """
         if num_max is None:
             num_max = self.num_qids
 
-        # For all possible QIDs combinations in the given range
-        for num_qids in np.arange(num_min, num_max + 1):
-            for qids_sel in it.combinations(self.qids, num_qids):
-                qids_sel = list(qids_sel)
+        self.result_comb_qids_reid = pd.DataFrame(columns=["qids", "num_qids", "post_vul"])
+        if save_file_name is not None:
+            # Create a new file with the header
+            self.result_comb_qids_reid.to_csv(save_file_name, index=False)
 
-                # Re-identification attack
-                post_reid["qids"].append(", ".join(qids_sel))
-                post_reid["post_vul"].append(self.post_reid(qids_sel))
+        with multiprocessing.Pool(processes=n_processes) as pool:
+            # For all possible QIDs combinations in the given range make a Re-identification attack
+            for num_qids in np.arange(num_min, num_max + 1):
+                partial_result = pd.DataFrame(columns=["qids", "num_qids", "post_vul"])
+                # Run the attack for all combination of 'num_qids' QIDs
+                results = pool.imap_unordered(
+                    self._parallel_post_reid,
+                    it.combinations(self.qids, num_qids)
+                )
 
-        post_reid = pd.DataFrame(post_reid)
-        post_reid["num_qids"] = post_reid["qids"].apply(lambda x: str(x).count(",") + 1)
-        self.result_comb_qids_reid = post_reid
+                # Get results from the pool
+                for qids, posterior in results:
+                    partial_result.loc[len(partial_result)] = [", ".join(qids), num_qids, posterior]
+                
+                # Save once finished all combinations for 'num_qids'
+                self.result_comb_qids_reid = pd.concat(
+                    [self.result_comb_qids_reid, partial_result],
+                    ignore_index=True
+                )
 
-    def post_comb_qids_ai(self, num_min=1, num_max=None) -> None:
+                if save_file_name is not None:
+                    partial_result.to_csv(
+                        save_file_name,
+                        index=False,
+                        mode="a",     
+                        header=False,
+                        float_format="%.8f"
+                    )               
+
+    def post_comb_qids_ai(self, num_min=1, num_max=None, n_processes=1, save_file_name=None) -> None:
         """
         Compute the posterior vulnerabilitiy of Attribute-inference attacks for different number and combinations of quasi-identifiers.
 
@@ -154,35 +182,59 @@ class Attack(ABC):
             num_max (int, optional): Maximum number of quasi-identifiers (QIDs) to consider.
                 If None, it considers all possible combinations up to the total number of QIDs (the power set).
                 Defaults is None.
+            n_processes (int, optional): Number of processes to run the method in parallel using multiprocessing package.
+                Default is 1.
+            save_file_name (str, optional): File name to save the results. They will be saved in CSV format.
 
         Returns:
             None: This method updates the object's state by storing the computed results in `self.result_comb_qids_ai`.
-        """
-        post_ai = {"qids": [], "post_vul": []}
 
-        if num_min is None:
-            num_min = 1
+        Note:
+            - If save_file_name is given, the CSV file will contain the columns 'qids', 'num_qids' and 'post_vul_X' with posterior vulnerability results, where X is a sensitive attribute. If there is more than one sensitive attribute, there will a single column for each one of them.
+        """
         if num_max is None:
             num_max = self.num_qids
 
-        # For all possible QIDs combinations in the given range
-        for num_qids in np.arange(num_min, num_max + 1):
-            for qids_sel in it.combinations(self.qids, num_qids):
-                qids_sel = list(qids_sel)
+        self.result_comb_qids_ai = pd.DataFrame(
+            columns=["qids", "num_qids"]+["post_vul_"+att for att in self.sensitive]
+        )
+        
+        if save_file_name is not None:
+            # Create a new file with the header
+            self.result_comb_qids_ai.to_csv(save_file_name, mode="w", index=False)
 
-                # Attribute-inference attack
-                post_ai["qids"].append(", ".join(qids_sel))
-                post_ai["post_vul"].append(self.post_ai(qids_sel))
+        with multiprocessing.Pool(processes=n_processes) as pool:
+            # For all possible QIDs combinations in the given range make a Re-identification attack
+            for num_qids in np.arange(num_min, num_max + 1):
+                partial_result = pd.DataFrame(
+                    columns=["qids", "num_qids"]+["post_vul_"+att for att in self.sensitive]
+                )
 
-        post_ai = pd.DataFrame(post_ai)
+                # Run the attack for all combination of 'num_qids' QIDs
+                results = pool.imap_unordered(
+                    self._parallel_post_ai,
+                    it.combinations(self.qids, num_qids)
+                )
 
-        # Transform the result of each sensitive attribute to a column
-        for att in self.sensitive:
-            post_ai["post_vul_" + att] = post_ai["post_vul"].apply(lambda x: x[att])
-        post_ai.drop("post_vul", axis=1, inplace=True)
+                # Get results from the pool
+                for qids, posteriors in results:
+                    all_post = [posteriors[att] for att in self.sensitive]
+                    partial_result.loc[len(partial_result)] = [", ".join(qids), num_qids] + all_post
 
-        post_ai["num_qids"] = post_ai["qids"].apply(lambda x: str(x).count(",") + 1)
-        self.result_comb_qids_ai = post_ai
+                # Save once finished all combinations for 'num_qids'
+                self.result_comb_qids_ai = pd.concat(
+                    [self.result_comb_qids_ai, partial_result],
+                    ignore_index=True
+                )
+                
+                if save_file_name is not None:
+                    partial_result.to_csv(
+                        save_file_name,
+                        index=False,
+                        mode="a",
+                        header=False,
+                        float_format="%.8f"
+                    )
     
     def max_post_reid(self) -> pd.DataFrame:
         """
@@ -195,7 +247,7 @@ class Attack(ABC):
             raise ValueError("max_post_reid should be called only after calling post_comb_qids_reid")
 
         vul_column = "post_vul"
-        max_post = pd.DataFrame(columns=["num_qids", "qids", vul_column])
+        max_post = pd.DataFrame(columns=["qids", "num_qids", vul_column])
         for num_att in np.arange(1, self.num_qids + 1):
             filter_results = self.result_comb_qids_reid[
                 self.result_comb_qids_reid["num_qids"] == num_att
@@ -223,7 +275,7 @@ class Attack(ABC):
 
         vul_column = "post_vul_" + sensitive
 
-        max_post = pd.DataFrame(columns=["num_qids", "qids", vul_column])
+        max_post = pd.DataFrame(columns=["qids", "num_qids", vul_column])
         for num_att in np.arange(1, self.num_qids + 1):
             post_results = self.result_comb_qids_ai
             filter_results = post_results[post_results["num_qids"] == num_att]
@@ -231,58 +283,6 @@ class Attack(ABC):
             max_post.loc[len(max_post)] = max_vul
 
         return max_post
-
-    def save_post_reid(self, file_name) -> None:
-        """
-        Save the results of posterior vulnerabilities generated by `post_comb_qids_reid` for Re-identification attacks in a CSV file.
-
-        Parameters:
-            file_name (str): The name of the CSV file to save the results.
-
-        Note:
-            - The CSV file will contain columns such as 'num_qids', 'qids', and 'post_vul' with posterior vulnerability results.
-        """
-        if self.result_comb_qids_reid is None:
-            raise ValueError("save_post_reid should be called only after calling post_comb_qids_reid")
-
-        self.result_comb_qids_reid.to_csv(
-            file_name,
-            float_format="%.8f",
-            index=False
-        )
-
-    def save_post_ai(self, file_name) -> None:
-        """
-        Save the results of posterior vulnerabilities generated by `post_comb_qids_ai` for Attribute-inference attacks in a CSV file.
-
-        Parameters:
-            file_name (str): The name of the CSV file to save the results.
-
-        Note:
-            - The CSV file will contain columns such as 'num_qids', 'qids', and 'post_vul_X' with posterior vulnerability results, where X is a sensitive attribute. If there is more than one sensitive attribute, there will a single column for each one of them.
-        """
-        if self.result_comb_qids_ai is None:
-            raise ValueError("save_post_ai should be called only after calling post_comb_qids_ai")
-
-        self.result_comb_qids_ai.to_csv(
-            file_name,
-            float_format="%.8f",
-            index=False
-        )
-
-    def save_post(self, file_name_reid, file_name_ai) -> None:
-        """
-        Save both Re-identification and Attribute-inference posterior vulnerability results.
-
-        This function calls 'save_post_reid' and 'save_post_ai' to save the results of posterior vulnerability
-        for Re-identification and Attribute-inference attacks, respectively.
-
-        Parameters:
-            file_name_reid (str): The name of the CSV file to save Re-identification results.
-            file_name_ai (str): The name of the CSV file to save Attribute-inference results.
-        """
-        self.save_post_reid(file_name_reid)
-        self.save_post_ai(file_name_ai)
 
 class Probabilistic(Attack):
     """
@@ -329,6 +329,7 @@ class Probabilistic(Attack):
         """
         if qids is None:
             qids = self.qids
+        qids = list(qids)
 
         partitions = self.data.dataframe.groupby(qids).size().to_numpy()
         expected_post_prob = len(partitions) / self.data.num_rows
@@ -369,6 +370,7 @@ class Probabilistic(Attack):
         """
         if qids is None:
             qids = self.qids
+        qids = list(qids)
 
         if self.sensitive is None:
             raise NameError("sensitive is not declared")
@@ -379,7 +381,7 @@ class Probabilistic(Attack):
         histograms = dict()
         for sens in self.sensitive:
             partitions = self.data.dataframe.groupby(
-                qids+[sens]).size().droplevel(self.sensitive).to_frame().rename(columns={0: "counts"})
+                qids+[sens]).size().droplevel(sens).to_frame().rename(columns={0: "counts"})
             groupby_qids = partitions.groupby(qids)["counts"].agg(["max", "sum"]).reset_index()
             post_prob = groupby_qids["max"].sum() / self.data.num_rows
             if hist:
@@ -437,6 +439,7 @@ class Deterministic(Attack):
         """
         if qids is None:
             qids = self.qids
+        qids = list(qids)
 
         partitions = self.data.dataframe.groupby(qids).size().to_numpy()
         partition_size, counts = np.unique(partitions, return_counts=True)
