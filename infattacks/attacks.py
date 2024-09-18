@@ -3,7 +3,9 @@ import pandas as pd
 import itertools as it
 from humanize import intword
 from infattacks.data import Data
+from infattacks.utility import float_equal, is_in_list
 import multiprocessing
+from tqdm import tqdm
 from abc import ABC, abstractmethod
 
 class Attack(ABC):
@@ -111,7 +113,7 @@ class Attack(ABC):
     def _parallel_post_ai(self, qids):
         return (qids, self.post_ai(qids=qids))
     
-    def post_comb_qids_reid(self, num_min=1, num_max=None, n_processes=1, save_file_name=None) -> None:
+    def post_comb_qids_reid(self, num_min=1, num_max=None, n_processes=1, save_file_name=None, verbose=False) -> None:
         """
         Compute the posterior vulnerabilitiy of Re-identification attacks for different number and combinations of quasi-identifiers.
 
@@ -126,6 +128,7 @@ class Attack(ABC):
             n_processes (int, optional): Number of processes to run the method in parallel using multiprocessing package.
                 Default is 1.
             save_file_name (str, optional): File name to save the results. They will be saved in CSV format.
+            verbose (bool, optinal): Show the progress. Default is False.
 
         Returns:
             None: This method updates the object's state by storing the computed results in `self.result_comb_qids_reid`.
@@ -143,7 +146,7 @@ class Attack(ABC):
 
         with multiprocessing.Pool(processes=n_processes) as pool:
             # For all possible QIDs combinations in the given range make a Re-identification attack
-            for num_qids in np.arange(num_min, num_max + 1):
+            for num_qids in tqdm(np.arange(num_min, num_max + 1), desc="Number of qids", disable=(not verbose)):
                 partial_result = pd.DataFrame(columns=["qids", "num_qids", "post_vul"])
                 # Run the attack for all combination of 'num_qids' QIDs
                 results = pool.imap_unordered(
@@ -338,11 +341,12 @@ class Probabilistic(Attack):
             qids = self.qids
         qids = list(qids)
 
-        partitions = self.data.dataframe.groupby(qids).size().to_numpy()
-        expected_post_prob = len(partitions) / self.data.num_rows
+        partitions = self.data.dataframe.groupby(qids).size()
+        expected_post_prob = partitions.shape[0] / self.data.num_rows
 
         if hist:
-            histogram = self._gen_hist(1/np.array(partitions), partitions, hist_bin_size)
+            partitions = partitions.to_numpy()
+            histogram = self._gen_hist(1/partitions, partitions, hist_bin_size)
             return expected_post_prob, histogram
         
         return expected_post_prob
@@ -496,3 +500,107 @@ class Deterministic(Attack):
             results[sens] = post_prob
 
         return results
+
+class NoisyDataset(Attack):
+    """
+    Concrete class for probabilistic attacks on datasets. Inherits from Attack.
+
+    Parameters:
+        - data_ori (Data): Original dataset before noise addition.
+        - data_noisy (Data): Noisy dataset.
+        - qids (list): The quasi-identifiers used for the attack.
+        - channels (list): List of channels of differentially private mechanisms used to add noise.
+        - channel_domains (list): List of domains of channels. It must be in the same order as the parameter channels.
+        - sensitive (list, optional): List of sensitive attributes, default is None.
+    """
+
+    def __init__(self, data_ori:Data, data_noisy: Data, qids:list, channels:list, channel_domains:list, sensitive=None) -> None:
+        """
+        Initializes an instance of the Probabilistic class.
+
+        Parameters:
+            - data_ori (Data): Original dataset before noise addition.
+            - data_noisy (Data): Noisy dataset.
+            - qids (list): The quasi-identifiers used for the attack.
+            - channels (list): List of channels of differentially private mechanisms used to add noise.
+            - channel_domains (list): List of domains of channels. It must be in the same order as the parameter channels.
+            - sensitive (list, optional): List of sensitive attributes, default is None.
+        """
+        super().__init__(data_ori, qids, sensitive)
+        self.data_ori = self.data
+        self.data_noisy = data_noisy
+        self.channels = channels
+        self.channel_domains = channel_domains
+
+    def _gen_joint_2_matrices(self, A:np.array, B:np.array):
+        """
+        Let A be a matrix n*n with domain X where A[i,j] = Pr[j | i] and
+        B be a matrix m*m with domain Y where B[i,j] = Pr[j | i].
+        This method generates a matrix C with domain nm*nm where C[(a,b) | (c,d)] = Pr[c|a] * Pr[d|b].
+
+        Params:
+            - A (np.array): Matrix that represents a channel of a differntially private mechanism.
+            - B (np.array): Matrix that represents a channel of a differntially private mechanism.
+
+        Returns:
+            np.array: Matrix that contains the conditional probability of both channels passed as argument.
+        """
+        C = np.zeros((1,A.shape[0]*B.shape[0])) # Add a row of zeros to allow vertical concatenation
+        for i in range(A.shape[0]):
+            new_set_rows = A[i,0]*B
+            for j in range(1, A.shape[1]):
+                new_set_rows = np.concatenate((new_set_rows, A[i,j]*B), axis=1)
+            C = np.concatenate((C, new_set_rows), axis=0)
+        return C[1:,:] # Remove the first row of zeros
+
+    def _gen_joint_matrix(self, domains, channels):
+        n = len(channels)
+        joint_channel = self._gen_joint_2_matrices(channels[0], channels[1])
+
+        for i in np.arange(2, n):
+            joint_channel = self._gen_joint_2_matrices(joint_channel, channels[i])
+
+        joint_domain = list(it.product(*domains))
+        return joint_channel, joint_domain
+
+    def _cand_records(self, joint_channel, joint_domain, target_qids:tuple):
+        """
+        Returns:
+            list : List containing the index (row number) of each candidate in df_noisy.
+        """
+        qids_candidates = self.data_noisy.dataframe.groupby(self.qids).size().index.to_list()
+        
+        # Index of QID combination in the channel
+        qids_candidates_idx = [joint_domain.index(cand) for cand in qids_candidates]
+        target_qids_idx = joint_domain.index(target_qids)
+
+        # Select the row of the channel corresponding to the QID values the adversary knows
+        filt_channel = joint_channel[target_qids_idx,:]
+
+        # Take the max prob for the columns with the QID combinations that exist in the noisy dataset
+        max_prob = filt_channel[qids_candidates_idx].max()
+        mask_max_prob = np.zeros(len(joint_domain))
+        mask_max_prob[np.where(float_equal(filt_channel, max_prob))[0]] = True
+        mask_exist_qids = np.zeros(len(filt_channel))
+        mask_exist_qids[qids_candidates_idx] = True
+        final_mask = np.logical_and(mask_max_prob, mask_exist_qids)
+
+        # Take the combinations of qids with the maximum probability (argmax)
+        candidates_qids = list(it.compress(joint_domain, final_mask))
+        mask = self.data_noisy.dataframe.apply(lambda row: is_in_list(row, self.qids, candidates_qids), axis=1)
+        candidates = mask.index[mask].tolist()
+
+        return candidates
+
+    def post_reid_noisy(self, qids, domains, channels):
+        # Generate the joint channel
+        joint_channel, joint_domain = self._gen_joint_matrix(domains, channels)
+        
+        vul = 0
+        for target_idx in np.arange(self.data_ori.num_rows):
+            target_qids = tuple(self.data_ori.dataframe.loc[target_idx][qids].to_list())
+            candidates = self._cand_records(joint_channel, joint_domain, target_qids)
+            if target_idx in candidates:
+                vul += 1/len(candidates)
+
+        return vul/len(self.data_noisy.num_rows)
