@@ -403,8 +403,8 @@ class Probabilistic(Attack):
             expectations[sens] = post_prob
 
         if hist:
-            return expectations, histograms
-        
+            return expectations, histograms       
+
         return expectations
 
 class Deterministic(Attack):
@@ -475,16 +475,18 @@ class Deterministic(Attack):
                 results[sens] = 1
         return results
 
-    def post_ai(self, qids=None) -> dict:
+    def post_ai(self, qids=None, hist_domain=False):
         """
         Calculates the posterior vulnerability of Deterministic Attribute-inference attack.
         
         Parameters:
             qids (list, optional): List of quasi-identifiers.
                 If not provided (default is None), all the qids specified in the initialization of the class will be considered.
+            hist_domain (bool, optional): Whether to generate a histogram of posterior vulnerability per value in the attribute domain. Default is False.
 
         Returns:
-            dict: A dictionary containing the posterior vulnrability for each sensitive attribute.
+            dictionary or tuple: If hist_domain is False, returns a dictionary containing the posterior vulnrability for each sensitive attribute.
+            If hist_domain is True returns a pair where the first element is a dictionary containing the posterior vulnrability for each sensitive attribute and the second element is the distribution of success among the sensitive attribute values.
         """
         if qids is None:
             qids = self.qids
@@ -494,10 +496,23 @@ class Deterministic(Attack):
         
         results = dict()
         for sens in self.sensitive:
-            partitions = self.data.dataframe.groupby(qids + [sens]).size().droplevel(self.sensitive).to_frame().rename(columns={0: "counts"})
+            partitions = self.data.dataframe.groupby(qids + [sens]).size().to_frame().rename(columns={0: "counts"})
             groupby_qids = partitions.groupby(qids)["counts"].agg(["max", "sum"]).reset_index()
-            post_prob = groupby_qids[(groupby_qids["max"] == groupby_qids["sum"])]["max"].sum() / self.data.num_rows
-            results[sens] = post_prob
+
+            if hist_domain:
+                histograms = {att:0 for att in self.data.dataframe[sens].unique()}
+                idx_det_success = groupby_qids[(groupby_qids["max"] == groupby_qids["sum"])]
+                for comb in idx_det_success[qids + ["sum"]].values:
+                    qid_values = tuple(comb[:-1])
+                    num_indv = comb[-1]
+                    att_value = partitions.loc[qid_values].index.tolist()[0]
+                    histograms[att_value] += num_indv
+
+                post_prob = idx_det_success["max"].sum() / self.data.num_rows
+                results[sens] = (post_prob, histograms)
+            else:
+                post_prob = groupby_qids[(groupby_qids["max"] == groupby_qids["sum"])]["max"].sum() / self.data.num_rows
+                results[sens] = post_prob
 
         return results
 
