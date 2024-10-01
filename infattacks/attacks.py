@@ -486,7 +486,7 @@ class Deterministic(Attack):
 
         Returns:
             dictionary or tuple: If hist_domain is False, returns a dictionary containing the posterior vulnrability for each sensitive attribute.
-            If hist_domain is True returns a pair where the first element is a dictionary containing the posterior vulnrability for each sensitive attribute and the second element is the distribution of success among the sensitive attribute values.
+            If hist_domain is True returns a pair where the first element is a dictionary containing the posterior vulnerability for each sensitive attribute and the second element is the distribution of success among the sensitive attribute values (a dictionary where keys are elements of the domain and values are the percentage where 100% is the number of individuals in the dataset that can have the sensitive attribute value inferred with 100% of chance).
         """
         if qids is None:
             qids = self.qids
@@ -507,6 +507,10 @@ class Deterministic(Attack):
                     num_indv = comb[-1]
                     att_value = partitions.loc[qid_values].index.tolist()[0]
                     histograms[att_value] += num_indv
+                
+                # Transform the histogram couints in proportions
+                sum_ = sum(list(histograms.values()))
+                histograms = {value:count/sum_ for value, count in histograms.items()}
 
                 post_prob = idx_det_success["max"].sum() / self.data.num_rows
                 results[sens] = (post_prob, histograms)
